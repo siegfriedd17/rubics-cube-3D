@@ -1,0 +1,345 @@
+import pygame 
+from math import cos, sin, pi, sqrt
+import random
+import time
+#from numba import njit, float64
+#from numba.typed import List
+
+
+def matrice(point, matrice_rotation):
+    """ renvoie les coordonnes du point en passant par la matrice de rotation"""
+    nvx_point=[0,0,0]
+    for i in range(3):
+        for j in range(3):
+            nvx_point[i]+=point[j]*matrice_rotation[3*i+j]
+    nvx_point=[round(nvx_point[i],12) for i in range(3)]
+    return nvx_point
+
+
+def coordonne(point, angle):
+    """ retourne les nouvelles coordonnes du point avec une rotation 
+    d'angle 'angle' """
+    rotation_x=[1.0,      0.0,      0.0,
+                0.0, cos(angle), -sin(angle),
+                0.0, sin(angle), cos(angle)]
+    
+    rotation_y=[cos(3*angle), 0.0, -sin(3*angle),
+                    0.0,      1.0,      0.0,
+                sin(3*angle), 0.0, cos(3*angle)]
+    
+    rotation_z=[cos(2*angle), -sin(2*angle), 0.0,
+                sin(2*angle), cos(2*angle), 0.0,
+                    0.0,      0.0,      1.0]
+    #tout les axes
+    point=matrice(point, rotation_y)
+    point=matrice(point, rotation_x)
+    return matrice(point,rotation_z)
+    
+
+def mouvement(points_list, angle_tour):
+    """ applique les nouvelles coordonnees aux points du carré """
+    points_list = [coordonne(points_list[i], angle_tour) for i in range(len(points_list))]
+    return points_list
+
+
+def in2d_parameter(points_list, camera, mur):
+    """transformes the coordinates of the points from 3d to 2d
+    the camera coordinates are in variable and the wall is 'mur'
+    Utilisation des droites parametrees"""
+    nvx_points_list = []
+    
+    for i in points_list:
+        inverse_alpha = (mur[0]-camera[0])/(i[0]-camera[0])
+        vector_plan_y = inverse_alpha*(i[1]-camera[1])
+        vector_plan_z = inverse_alpha*(i[2]-camera[2])
+        
+        point_projection=(round(camera[1]+vector_plan_y ,15),
+                          round(camera[2]+vector_plan_z ,15)) 
+        nvx_points_list.append(point_projection)
+    return nvx_points_list
+
+
+def dist_camera_faces(points_list, face, camera):
+    """renvoie l'ordre de remplissage des faces (de la plus loin 
+    à la plus proche) en fonction de la localisation du point central 
+    de la face par rapport à la camera"""
+    ordre=0
+    pts_centor=[]
+    for i in face:
+        pt_oppose=len(i)//2
+        #calcule le vecteur(x,y,z) entre les points opposés d'une face 
+        
+        vector=[points_list[i[pt_oppose]][0] - points_list[i[0]][0],
+                points_list[i[pt_oppose]][1] - points_list[i[0]][1],
+                points_list[i[pt_oppose]][2] - points_list[i[0]][2]]
+        vector=[i/2 for i in vector]
+        
+        #on obtient les coordonnees du point central de la face
+        centor=(points_list[i[0]][0]+vector[0],
+                points_list[i[0]][0]+vector[1],
+                points_list[i[0]][0]+vector[2])
+
+        distance_cam_centor=camera[0]-centor[0]
+        """
+        vector=(points_list[i[pt_oppose]][0] - points_list[i[0]][0])/2
+        #on obtient les coordonnees du point central de la face
+        centor=points_list[i[0]][0]+vector
+        distance_cam_centor=camera[0]-centor
+        """
+        if distance_cam_centor>0:
+            pts_centor.append( (distance_cam_centor, ordre) )
+        ordre+=1
+    #on trie les faces à dessiner en premier
+    pts_centor.sort( key=lambda x: x[0],reverse=True)
+    ordre_face=[i[1] for i in pts_centor]
+    return ordre_face
+
+
+def make_face(div, face):
+    """renvoie les 4 points pour chaque sub face crée"""
+    all_face=[]
+    nbr_face=[i for i in range(0,len(face))]
+    for coef in nbr_face:
+        for y in range(div+1):
+            for x in range(div+1):
+                x1=x+1
+                y1=y+1
+                rect=(div+2)**2*coef
+                face = ( ( x+y*(div+2) )+rect, ( x1+y*(div+2) )+rect,
+                        ( x1+y1*(div+2) )+rect,( x+y1*(div+2) )+rect)
+                all_face.append(face)
+    return all_face
+        
+
+def separation_face(face, points_list, div):
+    """permet de separer les faces du cube en plusieurs mini face avec un diviseur de face donnée
+    renvoie les 4 points pour chaque sub_face et les coordonnees des points"""
+    tt_points=[]
+    for i in face:
+        i=[j[0] for j in i]
+    
+        Vect_abs=[points_list[i[1]][0]-points_list[i[0]][0],
+                  points_list[i[1]][1]-points_list[i[0]][1],
+                  points_list[i[1]][2]-points_list[i[0]][2]]
+        Vect_abs=[i/(div+1) for i in Vect_abs]
+        
+        Vect_ord=[points_list[i[3]][0]-points_list[i[0]][0],
+                  points_list[i[3]][1]-points_list[i[0]][1],
+                  points_list[i[3]][2]-points_list[i[0]][2]]
+        Vect_ord=[i/(div+1) for i in Vect_ord]
+        
+        for y in range(div+2):
+            Vect_ord_2=[i*y for i in Vect_ord]
+            for x in range(div+2):
+                Vect_abs_2=[i*x for i in Vect_abs]
+                sub_point=(points_list[i[0]][0]+Vect_ord_2[0]+Vect_abs_2[0],
+                           points_list[i[0]][1]+Vect_ord_2[1]+Vect_abs_2[1],
+                           points_list[i[0]][2]+Vect_ord_2[2]+Vect_abs_2[2])
+                
+                tt_points.append(sub_point)
+    return tt_points
+
+
+def dot_product(normal,light):
+    """ renvoi un coef pour assombrir la face en fonction de la valeur du dot product 
+    entre vecteur normal d'une face et celle de la source de lumière """
+
+    valeur=normal[0]*light[0]+normal[1]*light[1]+normal[2]*light[2]
+    return valeur
+
+
+def darken(rgb, rate):
+    rgb=rgb[1::]
+    s=[]
+    for i in [0,2,4]:
+        c = rgb[i:i+2]
+        c = int(c, 16)
+        c = int(c * rate)
+        s.append(c)
+    return s
+
+
+def shadow(face, normal_list, color, div):
+    """permet d'assombrir les faces qui sont opposés à la source de lumière"""
+    light=(0,-10,0)
+    list_color=[]
+    indice_couleur=0
+    list_rate=[]
+    for i in face:
+        i=[j[2] for j in i]
+        x=0
+        y=0
+        z=0
+        for j in i:
+            x+=normal_list[j][0]
+            y+=normal_list[j][1]
+            z+=normal_list[j][2]
+        vect_normal=[x, y, z]
+
+        coef=sqrt(vect_normal[0]**2+vect_normal[1]**2+vect_normal[2]**2)*sqrt(light[0]**2+light[1]**2+light[2]**2)
+        # permet de recalibrer la rate allant de 0 à 1 en fonction du cos(angle) qui va de -1 a 1
+        rate= 0.6 -0.4*dot_product(vect_normal,light)/coef
+        for i in range( indice_couleur, indice_couleur+(div+1)**2+1 ):
+            list_color.append( darken(color[i], rate) )
+        indice_couleur += (div+1)**2
+
+        list_rate.append(rate)    
+    return list_color
+
+
+def face_color(div, points_list):
+    """renvoie une liste de couleur"""
+    list_color=[]
+    for i in points_list:
+        rand_colors = "#"+''.join([random.choice('ABCDE0123456789') for i in range(6)])
+        list_color.append(rand_colors)
+    list_color=list_color*(div+1)**2
+    random.shuffle(list_color)
+    return list_color
+
+
+def rectification(points_list_2d, res_fenetre, zoom):
+    """recentre le cube au centre de la fenetre"""
+    nvx_points_list=[]
+    for i in points_list_2d:
+        x = zoom*i[0] + res_fenetre[0]/2
+        y = zoom*i[1] + res_fenetre[1]/2
+        nvx_points_list.append( (x,y) )
+    return nvx_points_list
+
+
+def cube(points_list_2d, nvx_face, ordre, couleur):
+    """dessine un cube 3d """
+    #permet d'enlever l'affichage de 1faces et demie => optimisation
+    #ordre=ordre[int(3/2*(div+1)**2)::]
+
+    screen.fill( (255,255,255) )
+    for h in ordre: #permet de dessiner 6 faces
+        coord=[points_list_2d[i] for i in nvx_face[h]]
+        pygame.draw.polygon(screen, couleur[h], coord)
+        pygame.draw.polygon(screen, (0, 0, 0), coord, 1)
+
+    pygame.display.update()
+    
+
+def affichage(points_list, face, normal_list, couleur, div, res_fenetre):
+    """fait tourner le carré 
+    points_list: list de tuple"""
+    
+    angle_tour = pi/30
+    rapprochement = 0
+    zoom=80
+    run = True
+
+    nvx_face=make_face(div, face)
+    # permet de faire 1 rotation à tant fps(c'est une variable)
+    while run is True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                run=False                
+
+        camera = (10+rapprochement, 0, 0)
+        mur = (2+rapprochement,0,0)  # le mur est sur l'axe des x
+
+        nvx_points_list = separation_face(face, points_list,div)
+        couleur_fps = shadow(face, normal_list, couleur, div)
+        ordre = dist_camera_faces(nvx_points_list, nvx_face, camera)
+    
+        points_list_2d = in2d_parameter(nvx_points_list, camera,mur)
+        points_list_2d=rectification(points_list_2d, res_fenetre, zoom)
+
+        # permet d'afficher le cube en 3d (1 face à la fois)
+        cube (points_list_2d, nvx_face, ordre, couleur_fps)
+        points_list = mouvement(points_list, angle_tour)
+        normal_list = mouvement(normal_list, angle_tour)
+        pygame.time.delay(100)
+        
+        #rapprochement += -1/21
+    pygame.quit()
+
+
+def obj_vertex(string):
+    """ permet d'obtenir les points"""
+    point=[]
+    nvx_point=[[0.0,0.0,0.0]]
+    for i in string:
+        c=string.find('\n')
+        point.append(string[2:c-1])
+        string=string[c+1:]
+        if c==-1:
+            break
+    for i in point:
+        c=i.split()
+        nvx_point.append( [float(i) for i in c] )
+    return nvx_point
+
+
+def obj_face(string):
+    """ permet d'avoir les faces à afficher"""
+    face=[]
+    nvx_face=[]
+    for i in string:
+        c=string.find('\n')
+        face.append(string[2:c])
+        string=string[c+1:]
+        if c==-1:
+            break
+    for i in face:
+        c=i.split()
+        triangle=[]
+        for i in c:
+            k=i.split('/')
+            k=[int(i) for i in k]
+            triangle.append(k)
+        nvx_face.append( triangle )
+    return nvx_face
+
+
+def conversion_obj(file):
+    """convertit le fichier obj en deux list
+    list_point et list_face"""
+    str_file= file.read()
+
+    g=str_file.find('v ')
+    c=str_file.find('vt')
+    list_point=str_file[g:c-1]
+    list_point=obj_vertex(list_point)
+    
+    d=str_file.find('f ')
+    list_face=str_file[d:]
+    list_face=obj_face(list_face)
+    list_face=list_face[:-1]
+
+    t=str_file.find('vn ')
+    r=str_file.find('usemtl')
+    list_normal=str_file[t:r]
+    list_normal=obj_vertex(list_normal)[:-1]
+    
+    return list_face, list_point, list_normal
+
+
+def main():
+    """execute le prgm"""
+    
+    # prend les valeurs contenu dans le fichier obj
+    file = open("cube.obj", "r", encoding="utf8")
+    face, points_list, normal_list= conversion_obj(file)
+
+    #div=int(input("combien de sous face par face voulez vous: (max: 10)"))
+    div=2
+    couleur = face_color(div, points_list)
+
+    res_fenetre=(800,600)
+    pygame.display.set_caption("3D projection in pygame!")
+    global screen
+    screen = pygame.display.set_mode((res_fenetre[0], res_fenetre[1]))
+    
+    affichage(points_list, face, normal_list, couleur, div, res_fenetre)
+    
+
+# Progamme principal
+if __name__=='__main__':
+    start = time.time()
+    main()
+    end = time.time()
+    print( "\n{} secondes\n".format(end-start) )
